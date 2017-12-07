@@ -25,7 +25,7 @@ uint8_t STATE = -1;
 uint8_t led_seg = led;
 uint8_t contacts, seconds, minutes, hours, interruptFlag;
 uint16_t units, compsunits, analog_voltage;
-uint8_t analog_timeout, button_pressed, tick, button_timeout;
+uint8_t analog_timeout, button_pressed, button_was_pressed, tick, button_timeout;
 
 void init_osc() {
 	// Change to 1MHz by changing clock prescaler to 8
@@ -133,12 +133,12 @@ int main(void)
 			case STATE_SLEEP: power_down(); break;
 			case STATE_INIT: 
 				//Set timer compare vector to 10000 microseconds (100Hz --> 50Hz per module)
-				ADCSRA = 0b10001111;				/* Enable the ADC and its interrupt feature
-				and set the ACD clock pre-scalar to clk/128 */
+				ADCSRA = 0b10001111;			/* Enable the ADC and its interrupt feature
+												* and set the ACD clock pre-scalar to clk/128 */
 				ADCSRB |= _BV(REFS2);
-				ADMUX = 0b10000010;					/*Select internal 2.56V as Vref, left justify
-				data registers and select ADC2 as input channel */
-				ADCSRA |= _BV(ADSC);				// Start Conversion
+				ADMUX = 0b10000010;				/* Select internal 2.56V as Vref, left justify
+												* data registers and select ADC2 as input channel */
+				ADCSRA |= _BV(ADSC);			// Start Conversion
 				STATE = STATE_READY;
 				sleep();
 				break;
@@ -175,12 +175,15 @@ ISR(ADC_vect)
 
 ISR(TIMER0_COMPA_vect)
 {
+	if(button_timeout > 0) button_timeout++;			// Timeout calculation for beep
+	if(button_pressed == 1) button_timeout++;			// Start timeout for beep
 	/* BEGIN: Button pressed handling */
-	if(button_pressed == 0  && units%50 == 0) {
-		PORTB &= ~_BV(PB4);						// Speaker off
+	if(button_pressed == 0  && button_timeout == 50) {	// If timeout strikes
+		PORTB &= ~_BV(PB4);								// Speaker off
+		button_timeout = 0;
 	}
-	if(button_pressed == 1) {
-		PORTB |= _BV(PB4);						// Speaker on
+	if(button_pressed == 1) {							// If button was pressed
+		PORTB |= _BV(PB4);								// Speaker on
 		button_pressed = 0;
 	}
 	/* END */
