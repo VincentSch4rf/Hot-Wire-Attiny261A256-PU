@@ -1,0 +1,196 @@
+/*
+ * HeisserDraht.c
+ *
+ * Created: 04.12.2017 13:47:27
+ * Author : Vincent Scharf
+ */ 
+
+#include <avr/io.h>
+#include <avr/power.h>
+#include <avr/sleep.h>
+#include <avr/interrupt.h>
+
+#define win   16
+#define loose 17
+void seg_out(uint8_t out);
+
+#define led 1
+#define seg 2
+
+uint8_t led_seg = led;
+uint8_t contacts, seconds, minutes, hours, interruptFlag;
+uint16_t units, compsunits, analogA;
+
+/*Initialize ports:
+	PA0, PA1, PA1, PA3 ... PA7 Output
+	PA2 Input
+	PB3 Output
+*/
+inline void init_ports()
+{
+	//PA2 as input, rest output
+	DDRA |= 0b11111011;
+	//PB3 as output, rest input
+	DDRB |= _BV(PB3) | _BV(PB4);
+	PORTA = _BV(PA2);		// Enable PA2 pull-up resistor
+	PORTB = _BV(PB6);		// Enable PB6 pull-up resistor
+}
+
+void LED_out(uint8_t out)
+{
+	PORTB &= ~_BV(PB3);
+	PORTA &= 0b00000111;
+	PORTA |= out<<3;
+}
+
+void seg_out(uint8_t out)
+{
+	PORTB |= _BV(PB3);
+	PORTA &= 0b00000100;
+
+	switch(out)
+	{
+		case 0:		PORTA |= 0b00000001; break;
+		case 1:		PORTA |= 0b10011011; break;
+		case 2:		PORTA |= 0b00100010; break;
+		case 3:		PORTA |= 0b00001010; break;
+		case 4:		PORTA |= 0b10011000; break;
+		case 5:		PORTA |= 0b01001000; break;
+		case 6:		PORTA |= 0b01000000; break;
+		case 7:		PORTA |= 0b00011011; break;
+		case 8:		PORTA |= 0b00000000; break;
+		case 9:		PORTA |= 0b00001000; break;
+		case 0xA:	PORTA |= 0b00010000; break;
+		case 0xB:	PORTA |= 0b11000000; break;
+		case 0xC:	PORTA |= 0b01100001; break;
+		case 0xD:	PORTA |= 0b10000010; break;
+		case 0xE:	PORTA |= 0b01100000; break;
+		case 0xF:	PORTA |= 0b01110000; break;
+		case win:	PORTA |= 0b11000011; break;
+		case loose:	PORTA|= 0b01101010; break;
+		default:	PORTA |= 0b00000001; break;
+	}
+
+}
+
+int main(void)
+{
+	
+	// Change to 2 MHz by changing clock prescaler to 4
+	cli(); // Disable interrupts
+	CLKPR = _BV(CLKPCE); // Prescaler enable
+	CLKPR = _BV(CLKPS1); // Clock division factor 4 (0010)
+	//Initialize the ports
+	init_ports();
+	contacts = 0;
+	interruptFlag = 0;
+	//Set timer compare vector to 10000 microseconds (100Hz --> 50Hz per module)
+	OCR0A |= 78;
+	TCCR0A |= 1;	//set timer mode to ctc
+	PCMSK0 |= _BV(PCINT2); //set port toggle interrupt bit for PA2
+	PCMSK1 |= _BV(PCINT13); //set port toggle interrupt bit for PB6
+	GIMSK = _BV(INT0) | _BV(INT1);		// Enable INT0 and INT1
+	MCUCR = _BV(ISC01) | _BV(ISC00);	// Trigger INT0 on rising edge
+	TIMSK |= _BV(OCIE0A); //set counter compare match interrupt bit
+	sei();	//enable interrupts globally
+	TCCR0B |= _BV(CS02) | _BV(CS00);	//set prescaler to 1/1024 --> 
+	/* 8MHz/256 = 31,25KHz Internal Oscillator frequenzy
+	   31,25KHz/1024 = 33ms --> to big intervall
+	   31,25KHz/256 = 8,2ms
+	   1s/8,2ms = 122
+	*/
+
+//Test ADC
+		ADCSRA = 0x8F;			// Enable the ADC and its interrupt feature
+		// and set the ACD clock pre-scalar to clk/128
+		ADMUX = 2;			// Select internal 2.56V as Vref, left justify
+		// data registers and select ADC0 as input channel
+		
+		sei();				// Enable Global Interrupts
+		ADCSRA |= 1<<ADSC;		// Start Conversion
+	while (1) {
+		MCUCR |= SLEEP_MODE_IDLE; //set sleepmode
+	}
+	return 0;
+}
+
+ISR(INT0_vect)
+{
+	interruptFlag = 1;
+}
+
+ISR(INT1_vect)
+{
+	/*if(interruptFlag == 1) {
+		interruptFlag = 0;
+		MCUCR = _BV(ISC01) | _BV(ISC00);	// Trigger INT0 and INT1 on rising edge
+		contacts++;
+		} else if(interruptFlag == 0) {
+		interruptFlag = 1;
+		MCUCR = ~_BV(ISC01) | ~_BV(ISC00);	// Trigger INT0 and INT1 on falling edge
+	}*/
+}
+
+/*ADC Conversion Complete Interrupt Service Routine (ISR)*/
+ISR(ADC_vect)
+{
+	
+	analogA = ADCH;			// Output ADCH to PortD
+	ADCSRA |= 1<<ADSC;		// Start Conversion
+}
+
+ISR(TIMER0_COMPA_vect)
+{
+	if(interruptFlag == 1 && units%50 == 0) {
+		contacts = contacts + 1;
+		interruptFlag = 0;
+	}
+	units++; //increase 20ms unit counter
+	compsunits++; // increase compensation counter
+	if(compsunits%30 == 0 || compsunits%10 == 0) { //if compensation unit is a multiple of 3 set TCCROA to 1 instead of 0 to compensate the 0.3 overhead we can't count
+		TCCR0A |= 1;
+	} else if(compsunits%30 == 0 && compsunits%10 == 0) {
+		TCCR0A |= 2;
+	}
+	if(compsunits == 10) { //at each 10th count reset the compsunits to 0 so we get +3 for each 10 counts
+		compsunits = 0;
+	}
+	if(units == 100) { //set second
+		units = 0;
+		seconds++;
+	}
+	if(seconds == 60) //set minute
+	{
+		seconds = 0;
+		minutes++;
+	}
+	if(minutes == 60) //set hour
+	{
+		minutes = 0;
+		hours++;
+	}
+	if(hours > 23) //reset
+	{
+		hours = 0;
+	}
+	
+	//flash led and 7-segment with 25Hz each
+	if(units%2 == 0) {
+		led_seg = led;
+	} else {
+		led_seg = seg;
+	}
+	
+	if(led_seg == led)
+	{
+		LED_out(seconds);
+		led_seg = seg;
+	}
+	else if(led_seg == seg)
+	{
+		if(analogA < 1)
+		seg_out(1);
+		led_seg = led;
+	}
+}
+
