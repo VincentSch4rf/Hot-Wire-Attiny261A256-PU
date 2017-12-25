@@ -40,12 +40,16 @@ void power_down() {
 	power_all_disable ();
 	sleep_enable();
 	sleep_cpu();
+	sleep_disable();							// Disable sleep
+	ADCSRA = _BV(ADEN);							// Power on ADC
+	power_all_enable();
 }
 
 void sleep() {
 	set_sleep_mode(SLEEP_MODE_IDLE);			// Set sleep-mode
 	sleep_enable();
 	sleep_mode();
+	sleep_disable();
 }
 
 /*Initialize ports:
@@ -93,7 +97,7 @@ void seg_out(uint8_t out)
 		case 0xE:	PORTA |= 0b01100000; break;
 		case 0xF:	PORTA |= 0b01110000; break;
 		case win:	PORTA |= 0b11000011; break;
-		case loose:	PORTA|= 0b01101010; break;
+		case loose:	PORTA |= 0b01101010; break;
 		default:	PORTA |= 0b00000001; break;
 	}
 
@@ -103,6 +107,7 @@ int main(void)
 {
 	init_osc();									// Initialize Oscillator
 	init_ports();								// Initialize the ports
+	
 	contacts = 0;
 	interruptFlag = 0;
 	analog_timeout = 0;
@@ -127,7 +132,6 @@ int main(void)
 		39.9 = 13 => every 10th step set start of CompareReg to 1 every 30th step set it to 2 --> (100/10)*1 + (100%30)*1 = 13
 	*/
 	STATE = STATE_SLEEP;
-	power_down();
 	while (1) {
 		switch (STATE) {
 			case STATE_SLEEP: power_down(); break;
@@ -143,7 +147,8 @@ int main(void)
 				sleep();
 				break;
 			case STATE_READY: STATE = STATE_PLAY; break;
-			case STATE_PLAY: sleep(); break;
+			case STATE_PLAY: sleep(); 
+			break;
 		}
 		// Empty like my head
 	}
@@ -152,15 +157,13 @@ int main(void)
 
 ISR(PCINT_vect)
 {
-	sleep_disable();							// Disable sleep
 	if(STATE == STATE_SLEEP) {
-		power_all_enable();						// Power everything back on
 		STATE = STATE_INIT;
 	}
 	if(tick == 0){
 		button_pressed = 1;
 		tick = 1;
-		} else if(tick == 1) {
+	} else if(tick == 1) {
 		tick = 0;
 	}
 }
@@ -168,7 +171,6 @@ ISR(PCINT_vect)
 /*ADC Conversion Complete Interrupt Service Routine (ISR)*/
 ISR(ADC_vect)
 {
-	sleep_disable();							// Disable sleep
 	analog_voltage = ADCH;						// Output ADCH to variable
 	ADCSRA |= 1<<ADSC;							// Start Conversion
 }
@@ -179,11 +181,15 @@ ISR(TIMER0_COMPA_vect)
 	if(button_pressed == 1) button_timeout++;			// Start timeout for beep
 	/* BEGIN: Button pressed handling */
 	if(button_pressed == 0  && button_timeout == 50) {	// If timeout strikes
-		PORTB &= ~_BV(PB4);								// Speaker off
+		//PORTB &= ~_BV(PB4);								// Speaker off
 		button_timeout = 0;
 	}
 	if(button_pressed == 1) {							// If button was pressed
-		PORTB |= _BV(PB4);								// Speaker on
+		// Set up Timer/Counter1 for PWM output
+		OCR1D  = 212;
+		TCCR1B = _BV(CS12);					// 1:32 prescale
+		TCCR1C = 1<<COM1A0S | 1<<COM1D0 | 1<<PWM1D;		// PWM D, clear on match
+		//PORTB |= _BV(PB4);							// Speaker on
 		button_pressed = 0;
 	}
 	/* END */
